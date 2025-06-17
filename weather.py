@@ -7,9 +7,10 @@ from math import radians, cos, sin, sqrt, atan2
 from scipy.ndimage import gaussian_filter1d
 import matplotlib.colors as mcolors
 from matplotlib.colors import Normalize
-import requests
 import datetime
+from datetime import timedelta
 from pathlib import Path
+import pytz
 
 def get_latest_available_gfs_file(forecast_hour):
     now = datetime.datetime.utcnow()
@@ -89,6 +90,7 @@ def get_airport_latlon(code):
     lat = geometry["y"]
     lon = geometry["x"]
     return lat, lon
+
 def nearest_index(array, value):
     array = np.array(array)
     return (np.abs(array - value)).argmin()
@@ -170,7 +172,7 @@ def miles_to_points(lat1, lon1, lat2, lon2, mile_interval=1.0):
     distance = haversine_distance(lat1, lon1, lat2, lon2)
     return int(distance / mile_interval) + 1
 
-def main(start_lat, start_lon, end_lat, end_lon, grib_file):
+def main(start_lat, start_lon, end_lat, end_lon, grib_file, forecast_time_str):
     print(f"Opening {grib_file}...")
 
     ds = xr.open_dataset(
@@ -215,16 +217,8 @@ def main(start_lat, start_lon, end_lat, end_lon, grib_file):
         for col in cloud_columns
     ]
     tcc_by_altitude = list(zip(*tcc_columns_interpolated))
-
-    # print("\nCloud Coverage Graph (x = location, y = altitude):")
-    # for row_idx, alt_ft in reversed(list(enumerate(fixed_altitudes))):
-    #     row = tcc_by_altitude[row_idx]
-    #     bars = "".join(colored_block(val) for val in row)
-    #     print(f"{alt_ft:5.0f} ft: {bars}")
-    #
     cloud_array = np.array(tcc_by_altitude) / 100.0
 
-    # Build a custom colormap and alpha mask
     base_cmap = mcolors.LinearSegmentedColormap.from_list("light_greys", [(1,1,1), (0.3,0.3,0.3)])
     norm = Normalize(vmin=0.1, vmax=1)
     rgba_img = base_cmap(norm(cloud_array))
@@ -248,7 +242,7 @@ def main(start_lat, start_lon, end_lat, end_lon, grib_file):
     ax.fill_between(x, 0, elevations, color='olivedrab', zorder=10)
     ax.plot(x, elevations, label='Ground Elevation', color='saddlebrown', linewidth=2, zorder=11)
 
-    ax.set_title("Cloud Coverage and Ground Elevation Along Route")
+    ax.set_title(f"Cloud Coverage and Ground Elevation\nForecast Time: {forecast_time_str}")
     ax.set_xlabel("Route Position")
     ax.set_ylabel("Altitude (ft)")
     ax.set_xlim(0, len(elevations))
@@ -266,9 +260,14 @@ if __name__ == "__main__":
     forecast_hour = input("Forecast hour (e.g., 36 for 36 hours ahead): ").zfill(3)
 
     try:
+        local_tz = datetime.datetime.now().astimezone().tzinfo
+        now_local = datetime.datetime.now(local_tz)
+        forecast_time_local = now_local + timedelta(hours=int(forecast_hour))
+        forecast_time_str = forecast_time_local.strftime("%Y-%m-%d %I:%M %p %Z")
+
         slat, slon = get_airport_latlon(start)
         elat, elon = get_airport_latlon(end)
         grib_file = get_latest_available_gfs_file(forecast_hour)
-        main(slat, slon, elat, elon, grib_file)
+        main(slat, slon, elat, elon, grib_file, forecast_time_str)
     except Exception as e:
         print(f"Error: {e}")
