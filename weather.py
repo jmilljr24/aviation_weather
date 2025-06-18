@@ -16,16 +16,12 @@ def round_down_to_nearest_3(n):
     return int(np.floor(n / 3.0) * 3)  # Strictly round down
 
 def get_best_matching_gfs_file(hours_ahead):
-    print(f"hours_ahead: {hours_ahead}")
     now_utc = datetime.datetime.utcnow()
-    print(f"now_utc: {now_utc}")
+
     # Round down current UTC time to nearest 3 hours for base time
     rounded_hour = round_down_to_nearest_3(now_utc.hour)
-    print(f"rounded_hour: {rounded_hour}")
     base_time_utc = now_utc.replace(hour=rounded_hour, minute=0, second=0, microsecond=0)
-    print(f"base_time_utc: {base_time_utc}") 
     target_forecast_time = base_time_utc + datetime.timedelta(hours=int(hours_ahead))
-    print(f"target_forecast_time: {target_forecast_time}")
     # GFS model cycles every 6 hours (00, 06, 12, 18 UTC)
     cycles = ["00", "06", "12", "18"]
     max_days_back = 2
@@ -38,15 +34,12 @@ def get_best_matching_gfs_file(hours_ahead):
 
         for cycle in cycles:
             cycle_time = datetime.datetime.strptime(f"{date_str}{cycle}", "%Y%m%d%H")
-            print(f"cycle_time: {cycle_time}")
             forecast_hour = int((target_forecast_time - cycle_time).total_seconds() / 3600)
-            print(f"forecast_hour: {forecast_hour}")
             if forecast_hour < 0 or forecast_hour > 384:
                 continue  # Out of valid range
 
             # Round down forecast hour to nearest 3
             forecast_hour = round_down_to_nearest_3(forecast_hour)
-            print(f"forecast_hour rounded down: {forecast_hour}")
             if forecast_hour < 0:
                 continue
 
@@ -60,7 +53,6 @@ def get_best_matching_gfs_file(hours_ahead):
             if response.status_code == 200:
                 if best_match is None or cycle_time > best_match[0]:
                     best_match = (cycle_time, forecast_hour, date_str, cycle)
-    print(f"best_match: {best_match}") 
     if not best_match:
         raise RuntimeError("No valid GFS file found covering the desired forecast time.")
 
@@ -232,7 +224,6 @@ def main(start_lat, start_lon, end_lat, end_lon, grib_file, forecast_time_str, f
     ]
     tcc_by_altitude = list(zip(*tcc_columns_interpolated))
     cloud_array = np.array(tcc_by_altitude) / 100.0
-    print("Number of columns in cloud_array:", cloud_array.shape[1])
 
     base_cmap = mcolors.LinearSegmentedColormap.from_list("light_greys", [(1,1,1), (0.3,0.3,0.3)])
     norm = Normalize(vmin=0.1, vmax=1)
