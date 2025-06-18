@@ -37,7 +37,6 @@ def get_best_matching_gfs_file(hours_ahead):
         date_str = date.strftime("%Y%m%d")
 
         for cycle in cycles:
-            #12pm utc
             cycle_time = datetime.datetime.strptime(f"{date_str}{cycle}", "%Y%m%d%H")
             print(f"cycle_time: {cycle_time}")
             forecast_hour = int((target_forecast_time - cycle_time).total_seconds() / 3600)
@@ -283,58 +282,46 @@ def main(start_lat, start_lon, end_lat, end_lon, grib_file, forecast_time_str, f
 if __name__ == "__main__":
     start = input("Start airport (FAA or ICAO): ").strip()
     end = input("End airport (FAA or ICAO): ").strip()
-    forecast_hour = input("Forecast hours ahead (e.g., 8 for 8 hours from now, or leave blank for 0-24h in 3h intervals): ").strip()
+    forecast_hour_input = input("Forecast hours ahead (e.g., 8 for 8 hours from now, or leave blank for 0-24h in 3h intervals): ").strip()
 
     try:
         slat, slon = get_airport_latlon(start)
         elat, elon = get_airport_latlon(end)
-        
-        # Create images folder if hour input is blank
-        if not forecast_hour:
+
+        # Create images folder if running multiple forecasts
+        if not forecast_hour_input:
             os.makedirs("images", exist_ok=True)
-        
-        # Get elevations once and reuse for all forecasts
+
+        # Prepare route and elevations once
         num_points = miles_to_points(slat, slon, elat, elon)
         route_points = interpolate_lat_lon(slat, slon, elat, elon, num_points)
         elevations = fetch_elevations(route_points)
-        
-        if not forecast_hour:
-            # Process 0-24 hours in 3-hour intervals
-            for hours_ahead in range(0, 25, 3):
-                try:
-                    grib_file, cycle_time, forecast_hour_used = get_best_matching_gfs_file(hours_ahead)
-                    forecast_time_utc = cycle_time + datetime.timedelta(hours=forecast_hour_used)
-                    
-                    # Convert UTC forecast time to local time
-                    local_tz = datetime.datetime.now().astimezone().tzinfo
-                    forecast_time_local = forecast_time_utc.astimezone(local_tz)
-                    forecast_time_str = forecast_time_local.strftime("%Y-%m-%d %I:%M %p %Z")
-                    forecast_hour_str = f"{hours_ahead:02d}"  # Zero-padded hour string
-                    
-                    print(f"\nProcessing forecast for {forecast_hour_str} hours ahead")
-                    print(f"Cycle time: {cycle_time.strftime('%Y-%m-%d %H:%M UTC')}")
-                    print(f"Forecast hour: {forecast_hour_used}")
-                    print(f"Valid time: {forecast_time_str}")
-                    
-                    main(slat, slon, elat, elon, grib_file, forecast_time_str, forecast_hour_str, elevations)
-                except Exception as e:
-                    print(f"Error processing forecast for {hours_ahead} hours: {e}")
-        else:
-            # Process single forecast
-            grib_file, cycle_time, forecast_hour_used = get_best_matching_gfs_file(forecast_hour)
-            forecast_time_utc = cycle_time + datetime.timedelta(hours=forecast_hour_used)
-            
-            # Convert UTC forecast time to local time
-            local_tz = datetime.datetime.now().astimezone().tzinfo
-            forecast_time_local = forecast_time_utc.astimezone(local_tz)
-            forecast_time_str = forecast_time_local.strftime("%Y-%m-%d %I:%M %p %Z")
-            forecast_hour_str = f"{int(forecast_hour):02d}"  # Zero-padded hour string
-            
-            print(f"\nProcessing forecast for {forecast_hour_str} hours ahead")
-            print(f"Cycle time: {cycle_time.strftime('%Y-%m-%d %H:%M UTC')}")
-            print(f"Forecast hour: {forecast_hour_used}")
-            print(f"Valid time: {forecast_time_str}")
-            
-            main(slat, slon, elat, elon, grib_file, forecast_time_str, forecast_hour_str, elevations)
+
+        # Forecast hours loop
+        forecast_hours = range(0, 25, 3) if not forecast_hour_input else [int(forecast_hour_input)]
+
+        for hours_ahead in forecast_hours:
+            try:
+                grib_file, cycle_time, forecast_hour_used = get_best_matching_gfs_file(hours_ahead)
+
+                # Compute valid forecast time with timezone awareness and conversion
+                utc = pytz.UTC
+                cycle_time_utc = utc.localize(cycle_time)
+                forecast_time_utc = cycle_time_utc + datetime.timedelta(hours=forecast_hour_used)
+                local_tz = datetime.datetime.now().astimezone().tzinfo
+                forecast_time_local = forecast_time_utc.astimezone(local_tz)
+                forecast_time_str = forecast_time_local.strftime("%Y-%m-%d %I:%M %p %Z")
+                forecast_hour_str = f"{hours_ahead:02d}"
+
+                print(f"\nProcessing forecast for {forecast_hour_str} hours ahead")
+                print(f"Cycle time: {cycle_time.strftime('%Y-%m-%d %H:%M UTC')}")
+                print(f"Forecast hour: {forecast_hour_used}")
+                print(f"Valid time: {forecast_time_str}")
+
+                main(slat, slon, elat, elon, grib_file, forecast_time_str, forecast_hour_str, elevations)
+
+            except Exception as e:
+                print(f"Error processing forecast for {hours_ahead} hours: {e}")
+
     except Exception as e:
         print(f"Error: {e}")
