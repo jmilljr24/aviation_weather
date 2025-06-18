@@ -12,33 +12,51 @@ from datetime import timedelta
 from pathlib import Path
 import pytz
 
-def get_latest_available_gfs_file(forecast_hour):
-    now = datetime.datetime.utcnow()
-    cycles = ["18", "12", "06", "00"]
+def round_to_nearest_3(n):
+    return int(round(n / 3.0) * 3)
+
+def get_best_matching_gfs_file(hours_ahead):
+    now_utc = datetime.datetime.utcnow().replace(minute=0, second=0, microsecond=0)
+    target_forecast_time = now_utc + datetime.timedelta(hours=int(hours_ahead))
+
+    # GFS model cycles every 6 hours
+    cycles = ["00", "06", "12", "18"]
     max_days_back = 2
 
+    best_match = None
+
     for day_offset in range(max_days_back + 1):
-        date = now - datetime.timedelta(days=day_offset)
+        date = now_utc - datetime.timedelta(days=day_offset)
         date_str = date.strftime("%Y%m%d")
 
         for cycle in cycles:
-            file_name = f"gfs.t{cycle}z.pgrb2.0p25.f{forecast_hour}"
+            cycle_time = datetime.datetime.strptime(f"{date_str}{cycle}", "%Y%m%d%H")
+            forecast_hour = round_to_nearest_3((target_forecast_time - cycle_time).total_seconds() / 3600)
+
+            if forecast_hour < 0 or forecast_hour > 384:
+                continue  # Out of valid range
+
+            file_name = f"gfs.t{cycle}z.pgrb2.0p25.f{forecast_hour:03d}"
             url = (
                 f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/gfs/prod/"
                 f"gfs.{date_str}/{cycle}/atmos/{file_name}"
             )
 
-            print(f"Trying: {url}")
             response = requests.head(url)
             if response.status_code == 200:
-                print(f"Found available file: {file_name}")
-                return download_gfs_file(date_str, cycle, forecast_hour)
+                if best_match is None or cycle_time > best_match[0]:
+                    best_match = (cycle_time, forecast_hour, date_str, cycle)
+    
+    if not best_match:
+        raise RuntimeError("No valid GFS file found covering the desired forecast time.")
 
-    raise RuntimeError("No available GFS data found in the last few days.")
+    cycle_time, forecast_hour, date_str, cycle = best_match
+    grib_file = download_gfs_file(date_str, cycle, forecast_hour)
+    return grib_file, cycle_time, forecast_hour
 
 def download_gfs_file(date_str, cycle, forecast_hour):
     base_url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/gfs/prod/gfs.{date_str}/{cycle}/atmos"
-    file_name = f"gfs.t{cycle}z.pgrb2.0p25.f{forecast_hour}"
+    file_name = f"gfs.t{cycle}z.pgrb2.0p25.f{forecast_hour:03d}"
     local_path = Path(file_name)
 
     if local_path.exists():
@@ -98,26 +116,7 @@ def nearest_index(array, value):
 def pressure_to_feet(p_hpa):
     p0 = 1013.25
     meters = 44330 * (1 - (p_hpa / p0) ** 0.1903)
-    feet = meters * 3.28084
-    return feet
-
-def feet_to_pressure(feet):
-    meters = feet / 3.28084
-    p0 = 1013.25
-    p = p0 * (1 - meters / 44330) ** (1 / 0.1903)
-    return p
-
-def get_grey_shade(percent):
-    if percent < 10:
-        return None
-    shade = int(250 - ((percent - 10) / 90) * 10)
-    return max(240, min(250, shade))
-
-def colored_block(percent):
-    shade = get_grey_shade(percent)
-    if shade is None:
-        return " "
-    return f"\033[38;5;{shade}m█\033[0m"
+    return meters * 3.28084
 
 def interpolate_lat_lon(start_lat, start_lon, end_lat, end_lon, num_points):
     lats = np.linspace(start_lat, end_lat, num_points)
@@ -168,7 +167,7 @@ def haversine_distance(lat1, lon1, lat2, lon2):
     a = sin(dlat/2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon/2)**2
     return 2 * R * atan2(sqrt(a), sqrt(1 - a))
 
-def miles_to_points(lat1, lon1, lat2, lon2, mile_interval=1.0):
+def miles_to_points(lat1, lon1, lat2, lon2, mile_interval=0.2):
     distance = haversine_distance(lat1, lon1, lat2, lon2)
     return int(distance / mile_interval) + 1
 
@@ -218,6 +217,7 @@ def main(start_lat, start_lon, end_lat, end_lon, grib_file, forecast_time_str):
     ]
     tcc_by_altitude = list(zip(*tcc_columns_interpolated))
     cloud_array = np.array(tcc_by_altitude) / 100.0
+    print("Number of columns in cloud_array:", cloud_array.shape[1])
 
     base_cmap = mcolors.LinearSegmentedColormap.from_list("light_greys", [(1,1,1), (0.3,0.3,0.3)])
     norm = Normalize(vmin=0.1, vmax=1)
@@ -257,17 +257,19 @@ def main(start_lat, start_lon, end_lat, end_lon, grib_file, forecast_time_str):
 if __name__ == "__main__":
     start = input("Start airport (FAA or ICAO): ").strip()
     end = input("End airport (FAA or ICAO): ").strip()
-    forecast_hour = input("Forecast hour (e.g., 36 for 36 hours ahead): ").zfill(3)
+    forecast_hour = input("Forecast hours ahead (e.g., 8 for 8 hours from now): ").strip()
 
     try:
+        grib_file, cycle_time, forecast_hour_used = get_best_matching_gfs_file(forecast_hour)
+        forecast_time_utc = cycle_time + datetime.timedelta(hours=forecast_hour_used)
+
+        # Convert UTC forecast time to local time
         local_tz = datetime.datetime.now().astimezone().tzinfo
-        now_local = datetime.datetime.now(local_tz)
-        forecast_time_local = now_local + timedelta(hours=int(forecast_hour))
+        forecast_time_local = forecast_time_utc.astimezone(local_tz)
         forecast_time_str = forecast_time_local.strftime("%Y-%m-%d %I:%M %p %Z")
 
         slat, slon = get_airport_latlon(start)
         elat, elon = get_airport_latlon(end)
-        grib_file = get_latest_available_gfs_file(forecast_hour)
         main(slat, slon, elat, elon, grib_file, forecast_time_str)
     except Exception as e:
         print(f"Error: {e}")
